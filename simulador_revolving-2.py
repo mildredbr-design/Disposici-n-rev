@@ -158,10 +158,12 @@ def interes_con_movimientos(capital, tin, fecha_inicio, fecha_fin,
 
 def simulador(capital, tin, cuota_mensual, fecha_inicio,
               dia_recibo, df_amort, df_dispos, seguro_tasa,
-              tipo_producto, cambios_dia=None):
+              tipo_producto, cambios_dia=None, cambios_cuota=None):
 
     if cambios_dia is None:
         cambios_dia = {}
+    if cambios_cuota is None:
+        cambios_cuota = {}
 
     capital = Decimal(str(capital))
     saldo = capital
@@ -186,6 +188,12 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             nuevo_dia = cambios_dia[clave]
             fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
             dia_pago_actual = nuevo_dia
+
+        # Cambio de mensualidad si corresponde este mes
+        if clave in cambios_cuota:
+            cuota = Decimal(str(cambios_cuota[clave])).quantize(
+                Decimal("0.01"), ROUND_HALF_UP
+            )
 
         fb = fecha_bloqueo_para_mes(fecha_recibo)
         corte = fb - timedelta(days=2)
@@ -302,6 +310,7 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             "Fecha bloqueo": fb,
             "Base interes": base_info,
             "Capital pendiente (EUR)": float(saldo + amort),
+            "Cuota aplicada (EUR)": float(cuota),
             "Cuota (EUR)": float(cuota_final),
             "Intereses (EUR)": float(interes),
             "Amortizacion (EUR)": float(amort),
@@ -488,6 +497,43 @@ for _, row in df_cambio_dia_raw.iterrows():
         pass
 
 # ---------------------------------------------------------
+# CAMBIO DE MENSUALIDAD
+# ---------------------------------------------------------
+
+st.subheader("Cambio de mensualidad")
+st.caption(
+    "Introduce el mes en que cambia la cuota (formato YYYY-MM) y el nuevo importe. "
+    "Solo afecta a la amortizacion de capital. Los intereses se calculan igual."
+)
+
+df_cambio_cuota_raw = st.data_editor(
+    pd.DataFrame({"Mes (YYYY-MM)": [None], "Nueva cuota (EUR)": [None]}),
+    column_config={
+        "Mes (YYYY-MM)": st.column_config.TextColumn(
+            "Mes del cambio (YYYY-MM)", help="Ejemplo: 2026-07"
+        ),
+        "Nueva cuota (EUR)": st.column_config.NumberColumn(
+            "Nueva cuota (EUR)", min_value=0, step=1.0
+        ),
+    },
+    num_rows="dynamic",
+    use_container_width=True,
+    key="editor_cambio_cuota",
+)
+
+# Convertir a diccionario {(year, month): nueva_cuota}
+cambios_cuota = {}
+for _, row in df_cambio_cuota_raw.iterrows():
+    if pd.isna(row["Mes (YYYY-MM)"]) or pd.isna(row["Nueva cuota (EUR)"]):
+        continue
+    try:
+        partes = str(row["Mes (YYYY-MM)"]).strip().split("-")
+        anio, mes_num = int(partes[0]), int(partes[1])
+        cambios_cuota[(anio, mes_num)] = float(row["Nueva cuota (EUR)"])
+    except Exception:
+        pass
+
+# ---------------------------------------------------------
 # TAE referencia y bloqueo
 # ---------------------------------------------------------
 
@@ -517,43 +563,48 @@ if st.button("Calcular", type="primary"):
         fecha_inicio, dia_recibo,
         df_amort_raw, df_dispos_raw,
         seguro_tasa, tipo_producto,
-        cambios_dia
+        cambios_dia, cambios_cuota
     )
 
     st.subheader("Tabla de amortizacion")
     st.dataframe(tabla, use_container_width=True)
 
     # TAE
-    fecha_origen_tae = fecha_ref_tae if fecha_ref_tae else fecha_inicio
+    # Fecha origen = fecha_inicio (siempre desde el inicio del credito)
+    # Flujos negativos: capital inicial + disposiciones (desembolsos)
+    # Flujos positivos: cuotas pagadas (recibos)
+    # Amortizaciones anticipadas son devoluciones anticipadas de capital
+    # y no se incluyen como flujos separados porque ya reducen el saldo
+    # y por tanto acortan las cuotas futuras.
 
-    capital_tae = Decimal(str(capital))
-    for _, row in df_amort_raw.iterrows():
-        if pd.isna(row["Fecha"]):
-            continue
-        fa = pd.to_datetime(row["Fecha"]).date()
-        if fa < fecha_origen_tae:
-            capital_tae -= Decimal(str(row["Importe"]))
-    capital_tae = max(capital_tae, Decimal("0"))
+    fecha_origen_tae = fecha_inicio
 
-    flujos = [-float(capital_tae)]
+    # Flujo inicial: capital original desembolsado
+    flujos = [-float(capital)]
     fechas_flujos = [fecha_origen_tae]
 
-    for _, row in tabla.iterrows():
-        if row["Fecha recibo"] >= fecha_origen_tae:
-            flujos.append(row["Recibo total (EUR)"])
-            fechas_flujos.append(row["Fecha recibo"])
-
-    for _, row in df_amort_raw.iterrows():
+    # Disposiciones: desembolsos adicionales (flujos negativos)
+    for _, row in df_dispos_raw.iterrows():
         if pd.isna(row["Fecha"]):
             continue
         fa = pd.to_datetime(row["Fecha"]).date()
-        if fa >= fecha_origen_tae and row["Importe"] > 0:
-            flujos.append(row["Importe"])
+        imp = row["Importe"]
+        if imp > 0:
+            flujos.append(-float(imp))
             fechas_flujos.append(fa)
+
+    # Cuotas pagadas: flujos positivos
+    for _, row in tabla.iterrows():
+        flujos.append(row["Recibo total (EUR)"])
+        fechas_flujos.append(row["Fecha recibo"])
 
     datos_tae = sorted(zip(fechas_flujos, flujos))
     fechas_flujos = [x[0] for x in datos_tae]
     flujos = [x[1] for x in datos_tae]
+
+    with st.expander("Debug TAE - flujos utilizados"):
+        df_debug = pd.DataFrame({"Fecha": fechas_flujos, "Flujo (EUR)": flujos})
+        st.dataframe(df_debug)
 
     tae = calcular_tae(flujos, fechas_flujos)
 
