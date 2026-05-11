@@ -189,22 +189,22 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
 
         clave = (fecha_recibo.year, fecha_recibo.month)
 
-        # Cambio de mensualidad si corresponde este mes
-        if cambios_cuota and clave in cambios_cuota:
-            cuota = Decimal(str(cambios_cuota[clave])).quantize(
-                Decimal("0.01"), ROUND_HALF_UP
-            )
-
-        # Cambio de dia de pago:
-        # Se introduce en el mes ANTERIOR al recibo que cambia.
+        # Cambio de dia de pago y cambio de cuota:
+        # Se introducen en el mes ANTERIOR al recibo que cambia.
         # Ejemplo: cambio introducido en mayo → afecta al recibo de junio.
-        # Por eso comparamos con el mes ANTERIOR al recibo actual (fecha_anterior).
         clave_anterior = (fecha_anterior.year, fecha_anterior.month)
+
         if cambios_dia and clave_anterior in cambios_dia:
             nuevo_dia = cambios_dia[clave_anterior]
             fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
             dia_pago_actual = nuevo_dia
             del cambios_dia[clave_anterior]
+
+        if cambios_cuota and clave_anterior in cambios_cuota:
+            cuota = Decimal(str(cambios_cuota[clave_anterior])).quantize(
+                Decimal("0.01"), ROUND_HALF_UP
+            )
+            del cambios_cuota[clave_anterior]
 
         fb = fecha_bloqueo_para_mes(fecha_recibo)
         corte = fb - timedelta(days=2)
