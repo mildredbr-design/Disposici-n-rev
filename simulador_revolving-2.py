@@ -158,10 +158,12 @@ def interes_con_movimientos(capital, tin, fecha_inicio, fecha_fin,
 
 def simulador(capital, tin, cuota_mensual, fecha_inicio,
               dia_recibo, df_amort, df_dispos, seguro_tasa,
-              tipo_producto, cambios_dia=None):
+              tipo_producto, cambios_dia=None, cambios_cuota=None):
 
     if cambios_dia is None:
         cambios_dia = {}
+    if cambios_cuota is None:
+        cambios_cuota = {}
 
     capital = Decimal(str(capital))
     saldo = capital
@@ -186,6 +188,12 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             nuevo_dia = cambios_dia[clave]
             fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
             dia_pago_actual = nuevo_dia
+
+        # Cambio de mensualidad si corresponde este mes
+        if clave in cambios_cuota:
+            cuota = Decimal(str(cambios_cuota[clave])).quantize(
+                Decimal("0.01"), ROUND_HALF_UP
+            )
 
         fb = fecha_bloqueo_para_mes(fecha_recibo)
         corte = fb - timedelta(days=2)
@@ -302,6 +310,7 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             "Fecha bloqueo": fb,
             "Base interes": base_info,
             "Capital pendiente (EUR)": float(saldo + amort),
+            "Cuota aplicada (EUR)": float(cuota),
             "Cuota (EUR)": float(cuota_final),
             "Intereses (EUR)": float(interes),
             "Amortizacion (EUR)": float(amort),
@@ -488,6 +497,43 @@ for _, row in df_cambio_dia_raw.iterrows():
         pass
 
 # ---------------------------------------------------------
+# CAMBIO DE MENSUALIDAD
+# ---------------------------------------------------------
+
+st.subheader("Cambio de mensualidad")
+st.caption(
+    "Introduce el mes en que cambia la cuota (formato YYYY-MM) y el nuevo importe. "
+    "Solo afecta a la amortizacion de capital. Los intereses se calculan igual."
+)
+
+df_cambio_cuota_raw = st.data_editor(
+    pd.DataFrame({"Mes (YYYY-MM)": [None], "Nueva cuota (EUR)": [None]}),
+    column_config={
+        "Mes (YYYY-MM)": st.column_config.TextColumn(
+            "Mes del cambio (YYYY-MM)", help="Ejemplo: 2026-07"
+        ),
+        "Nueva cuota (EUR)": st.column_config.NumberColumn(
+            "Nueva cuota (EUR)", min_value=0, step=1.0
+        ),
+    },
+    num_rows="dynamic",
+    use_container_width=True,
+    key="editor_cambio_cuota",
+)
+
+# Convertir a diccionario {(year, month): nueva_cuota}
+cambios_cuota = {}
+for _, row in df_cambio_cuota_raw.iterrows():
+    if pd.isna(row["Mes (YYYY-MM)"]) or pd.isna(row["Nueva cuota (EUR)"]):
+        continue
+    try:
+        partes = str(row["Mes (YYYY-MM)"]).strip().split("-")
+        anio, mes_num = int(partes[0]), int(partes[1])
+        cambios_cuota[(anio, mes_num)] = float(row["Nueva cuota (EUR)"])
+    except Exception:
+        pass
+
+# ---------------------------------------------------------
 # TAE referencia y bloqueo
 # ---------------------------------------------------------
 
@@ -517,7 +563,7 @@ if st.button("Calcular", type="primary"):
         fecha_inicio, dia_recibo,
         df_amort_raw, df_dispos_raw,
         seguro_tasa, tipo_producto,
-        cambios_dia
+        cambios_dia, cambios_cuota
     )
 
     st.subheader("Tabla de amortizacion")
