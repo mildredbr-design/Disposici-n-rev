@@ -593,14 +593,14 @@ if st.button("Calcular", type="primary"):
             flujos.append(-float(imp))
             fechas_flujos.append(fa)
 
-    # Amortizaciones anticipadas: devoluciones de capital (flujos negativos)
+    # Amortizaciones anticipadas: devoluciones de capital (flujos positivos)
     for _, row in df_amort_raw.iterrows():
         if pd.isna(row["Fecha"]):
             continue
         fa = pd.to_datetime(row["Fecha"]).date()
         imp = row["Importe"]
         if imp > 0:
-            flujos.append(-float(imp))
+            flujos.append(float(imp))
             fechas_flujos.append(fa)
 
     # Cuotas pagadas: flujos positivos
