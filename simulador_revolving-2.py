@@ -545,10 +545,8 @@ for _, row in df_cambio_cuota_raw.iterrows():
         pass
 
 # Debug: mostrar cambios detectados
-if cambios_dia:
-    st.caption(f"Cambios de dia detectados: {cambios_dia}")
-if cambios_cuota:
-    st.caption(f"Cambios de cuota detectados: {cambios_cuota}")
+st.caption(f"Cambios de dia detectados: {cambios_dia if cambios_dia else 'Ninguno'}")
+st.caption(f"Cambios de cuota detectados: {cambios_cuota if cambios_cuota else 'Ninguno'}")
 
 # ---------------------------------------------------------
 # TAE referencia y bloqueo
