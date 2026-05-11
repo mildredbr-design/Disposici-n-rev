@@ -166,6 +166,9 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
         cambios_dia = {}
     if cambios_cuota is None:
         cambios_cuota = {}
+    # Copiar para no mutar el original entre reruns
+    cambios_dia = dict(cambios_dia)
+    cambios_cuota = dict(cambios_cuota)
 
     capital = Decimal(str(capital))
     saldo = capital
@@ -184,13 +187,16 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
 
     while saldo > 0:
 
-        # Cambio de dia de pago si corresponde este mes
         clave = (fecha_recibo.year, fecha_recibo.month)
+
+        # Cambio de dia de pago si corresponde este mes
+        # El recibo de este mes pasa al nuevo dia (mismo mes)
+        # A partir del mes siguiente todos los recibos usan el nuevo dia
         if cambios_dia and clave in cambios_dia:
             nuevo_dia = cambios_dia[clave]
-            # El nuevo recibo cae en el nuevo dia del mismo mes
             fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
             dia_pago_actual = nuevo_dia
+            del cambios_dia[clave]  # aplicar solo una vez
 
         # Cambio de mensualidad si corresponde este mes
         if cambios_cuota and clave in cambios_cuota:
