@@ -593,7 +593,19 @@ if st.button("Calcular", type="primary"):
             flujos.append(-float(imp))
             fechas_flujos.append(fa)
 
+    # Amortizaciones anticipadas: devoluciones de capital (flujos negativos)
+    for _, row in df_amort_raw.iterrows():
+        if pd.isna(row["Fecha"]):
+            continue
+        fa = pd.to_datetime(row["Fecha"]).date()
+        imp = row["Importe"]
+        if imp > 0:
+            flujos.append(-float(imp))
+            fechas_flujos.append(fa)
+
     # Cuotas pagadas: flujos positivos
+    # Los cambios de mensualidad y dia de pago ya estan reflejados
+    # en las fechas y cuotas de la tabla
     for _, row in tabla.iterrows():
         flujos.append(row["Recibo total (EUR)"])
         fechas_flujos.append(row["Fecha recibo"])
@@ -601,10 +613,6 @@ if st.button("Calcular", type="primary"):
     datos_tae = sorted(zip(fechas_flujos, flujos))
     fechas_flujos = [x[0] for x in datos_tae]
     flujos = [x[1] for x in datos_tae]
-
-    with st.expander("Debug TAE - flujos utilizados"):
-        df_debug = pd.DataFrame({"Fecha": fechas_flujos, "Flujo (EUR)": flujos})
-        st.dataframe(df_debug)
 
     tae = calcular_tae(flujos, fechas_flujos)
 
