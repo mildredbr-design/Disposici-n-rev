@@ -614,6 +614,10 @@ if st.button("Calcular", type="primary"):
     fechas_flujos = [x[0] for x in datos_tae]
     flujos = [x[1] for x in datos_tae]
 
+    with st.expander("Debug TAE - flujos utilizados"):
+        df_debug = pd.DataFrame({"Fecha": fechas_flujos, "Flujo (EUR)": flujos})
+        st.dataframe(df_debug)
+
     tae = calcular_tae(flujos, fechas_flujos)
 
     total_intereses = round(tabla["Intereses (EUR)"].sum(), 2)
