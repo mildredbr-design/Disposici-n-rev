@@ -470,10 +470,10 @@ st.caption(
 )
 
 df_cambio_dia_raw = st.data_editor(
-    pd.DataFrame({"Mes (YYYY-MM)": [None], "Nuevo dia": [None]}),
+    pd.DataFrame({"Fecha del cambio": [None], "Nuevo dia": [None]}),
     column_config={
-        "Mes (YYYY-MM)": st.column_config.TextColumn(
-            "Mes del cambio (YYYY-MM)", help="Ejemplo: 2026-07"
+        "Fecha del cambio": st.column_config.DateColumn(
+            "Mes del cambio (cualquier dia del mes)", format="DD/MM/YYYY"
         ),
         "Nuevo dia": st.column_config.NumberColumn(
             "Nuevo dia de pago", min_value=1, max_value=28, step=1
@@ -487,12 +487,11 @@ df_cambio_dia_raw = st.data_editor(
 # Convertir a diccionario {(year, month): nuevo_dia}
 cambios_dia = {}
 for _, row in df_cambio_dia_raw.iterrows():
-    if pd.isna(row["Mes (YYYY-MM)"]) or pd.isna(row["Nuevo dia"]):
+    if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nuevo dia"]):
         continue
     try:
-        partes = str(row["Mes (YYYY-MM)"]).strip().split("-")
-        anio, mes_num = int(partes[0]), int(partes[1])
-        cambios_dia[(anio, mes_num)] = int(row["Nuevo dia"])
+        fa = pd.to_datetime(row["Fecha del cambio"]).date()
+        cambios_dia[(fa.year, fa.month)] = int(row["Nuevo dia"])
     except Exception:
         pass
 
@@ -507,10 +506,10 @@ st.caption(
 )
 
 df_cambio_cuota_raw = st.data_editor(
-    pd.DataFrame({"Mes (YYYY-MM)": [None], "Nueva cuota (EUR)": [None]}),
+    pd.DataFrame({"Fecha del cambio": [None], "Nueva cuota (EUR)": [None]}),
     column_config={
-        "Mes (YYYY-MM)": st.column_config.TextColumn(
-            "Mes del cambio (YYYY-MM)", help="Ejemplo: 2026-07"
+        "Fecha del cambio": st.column_config.DateColumn(
+            "Mes del cambio (cualquier dia del mes)", format="DD/MM/YYYY"
         ),
         "Nueva cuota (EUR)": st.column_config.NumberColumn(
             "Nueva cuota (EUR)", min_value=0, step=1.0
@@ -524,12 +523,11 @@ df_cambio_cuota_raw = st.data_editor(
 # Convertir a diccionario {(year, month): nueva_cuota}
 cambios_cuota = {}
 for _, row in df_cambio_cuota_raw.iterrows():
-    if pd.isna(row["Mes (YYYY-MM)"]) or pd.isna(row["Nueva cuota (EUR)"]):
+    if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nueva cuota (EUR)"]):
         continue
     try:
-        partes = str(row["Mes (YYYY-MM)"]).strip().split("-")
-        anio, mes_num = int(partes[0]), int(partes[1])
-        cambios_cuota[(anio, mes_num)] = float(row["Nueva cuota (EUR)"])
+        fa = pd.to_datetime(row["Fecha del cambio"]).date()
+        cambios_cuota[(fa.year, fa.month)] = float(row["Nueva cuota (EUR)"])
     except Exception:
         pass
 
