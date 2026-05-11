@@ -76,10 +76,12 @@ def crear_fecha_recibo(fecha_base, dia):
     return date(fecha_base.year, fecha_base.month, min(dia, ultimo_dia))
 
 
-def siguiente_mes_fecha(fecha):
+def siguiente_mes_fecha(fecha, dia=None):
+    """Si se pasa dia, usa ese dia en vez de fecha.day."""
+    d = dia if dia is not None else fecha.day
     if fecha.month == 12:
-        return date(fecha.year + 1, 1, fecha.day)
-    return date(fecha.year, fecha.month + 1, fecha.day)
+        return date(fecha.year + 1, 1, d)
+    return date(fecha.year, fecha.month + 1, d)
 
 
 # ---------------------------------------------------------
@@ -184,13 +186,14 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
 
         # Cambio de dia de pago si corresponde este mes
         clave = (fecha_recibo.year, fecha_recibo.month)
-        if clave in cambios_dia:
+        if cambios_dia and clave in cambios_dia:
             nuevo_dia = cambios_dia[clave]
+            # El nuevo recibo cae en el nuevo dia del mismo mes
             fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
             dia_pago_actual = nuevo_dia
 
         # Cambio de mensualidad si corresponde este mes
-        if clave in cambios_cuota:
+        if cambios_cuota and clave in cambios_cuota:
             cuota = Decimal(str(cambios_cuota[clave])).quantize(
                 Decimal("0.01"), ROUND_HALF_UP
             )
@@ -270,7 +273,7 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
         # P2: recibo proximo intacto, diferir ahorro al mes siguiente
         if amorts_p2:
             fecha_sig_recibo = crear_fecha_recibo(
-                siguiente_mes_fecha(fecha_recibo), dia_pago_actual
+                siguiente_mes_fecha(fecha_recibo, dia_pago_actual), dia_pago_actual
             )
             for fa, imp in amorts_p2:
                 ahorro = calcular_interes_tramo(
@@ -324,7 +327,7 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
 
         fecha_anterior = fecha_recibo
         fecha_recibo = crear_fecha_recibo(
-            siguiente_mes_fecha(fecha_recibo), dia_pago_actual
+            siguiente_mes_fecha(fecha_recibo, dia_pago_actual), dia_pago_actual
         )
         mes += 1
 
@@ -487,11 +490,13 @@ df_cambio_dia_raw = st.data_editor(
 # Convertir a diccionario {(year, month): nuevo_dia}
 cambios_dia = {}
 for _, row in df_cambio_dia_raw.iterrows():
-    if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nuevo dia"]):
-        continue
     try:
+        if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nuevo dia"]):
+            continue
         fa = pd.to_datetime(row["Fecha del cambio"]).date()
-        cambios_dia[(fa.year, fa.month)] = int(row["Nuevo dia"])
+        nd = int(row["Nuevo dia"])
+        if 1 <= nd <= 28:
+            cambios_dia[(fa.year, fa.month)] = nd
     except Exception:
         pass
 
@@ -523,13 +528,21 @@ df_cambio_cuota_raw = st.data_editor(
 # Convertir a diccionario {(year, month): nueva_cuota}
 cambios_cuota = {}
 for _, row in df_cambio_cuota_raw.iterrows():
-    if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nueva cuota (EUR)"]):
-        continue
     try:
+        if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nueva cuota (EUR)"]):
+            continue
         fa = pd.to_datetime(row["Fecha del cambio"]).date()
-        cambios_cuota[(fa.year, fa.month)] = float(row["Nueva cuota (EUR)"])
+        nc = float(row["Nueva cuota (EUR)"])
+        if nc > 0:
+            cambios_cuota[(fa.year, fa.month)] = nc
     except Exception:
         pass
+
+# Debug: mostrar cambios detectados
+if cambios_dia:
+    st.caption(f"Cambios de dia detectados: {cambios_dia}")
+if cambios_cuota:
+    st.caption(f"Cambios de cuota detectados: {cambios_cuota}")
 
 # ---------------------------------------------------------
 # TAE referencia y bloqueo
