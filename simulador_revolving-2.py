@@ -161,14 +161,22 @@ def interes_con_movimientos(capital, tin, fecha_inicio, fecha_fin,
 def simulador(capital, tin, cuota_mensual, fecha_inicio,
               dia_recibo, df_amort, df_dispos, seguro_tasa,
               tipo_producto, cambios_dia=None, cambios_cuota=None):
+    """
+    cambios_dia:   lista de (fecha_exacta_cambio, nuevo_dia)
+    cambios_cuota: lista de (fecha_exacta_cambio, nueva_cuota)
+    La fecha exacta se compara con la fecha de bloqueo del recibo en curso:
+      - Si fecha_cambio < fecha_bloqueo → aplica al recibo actual
+      - Si fecha_cambio >= fecha_bloqueo → aplica al recibo siguiente
+    """
 
     if cambios_dia is None:
-        cambios_dia = {}
+        cambios_dia = []
     if cambios_cuota is None:
-        cambios_cuota = {}
-    # Copiar para no mutar el original entre reruns
-    cambios_dia = dict(cambios_dia)
-    cambios_cuota = dict(cambios_cuota)
+        cambios_cuota = []
+
+    # Trabajar con copias para no mutar los originales entre reruns
+    cambios_dia = list(cambios_dia)
+    cambios_cuota = list(cambios_cuota)
 
     capital = Decimal(str(capital))
     saldo = capital
@@ -187,27 +195,52 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
 
     while saldo > 0:
 
-        clave = (fecha_recibo.year, fecha_recibo.month)
-
-        # Cambio de dia de pago y cambio de cuota:
-        # Se introducen en el mes ANTERIOR al recibo que cambia.
-        # Ejemplo: cambio introducido en mayo → afecta al recibo de junio.
-        clave_anterior = (fecha_anterior.year, fecha_anterior.month)
-
-        if cambios_dia and clave_anterior in cambios_dia:
-            nuevo_dia = cambios_dia[clave_anterior]
-            fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
-            dia_pago_actual = nuevo_dia
-            del cambios_dia[clave_anterior]
-
-        if cambios_cuota and clave_anterior in cambios_cuota:
-            cuota = Decimal(str(cambios_cuota[clave_anterior])).quantize(
-                Decimal("0.01"), ROUND_HALF_UP
-            )
-            del cambios_cuota[clave_anterior]
-
         fb = fecha_bloqueo_para_mes(fecha_recibo)
         corte = fb - timedelta(days=2)
+
+        # ---------------------------------------------------------
+        # CAMBIO DE DIA DE PAGO
+        # Regla: si la fecha exacta del cambio es ANTES de la fecha
+        # de bloqueo del recibo actual → aplica a este recibo.
+        # Si es >= fecha de bloqueo → aplica al recibo siguiente.
+        # Se consume el cambio en cuanto se decide (aunque sea diferido).
+        # ---------------------------------------------------------
+        cambios_dia_pendientes = []
+        for fecha_cambio, nuevo_dia in cambios_dia:
+            if fecha_anterior <= fecha_cambio <= fecha_recibo:
+                if fecha_cambio < fb:
+                    # Aplica al recibo actual
+                    fecha_recibo = crear_fecha_recibo(fecha_recibo, nuevo_dia)
+                    dia_pago_actual = nuevo_dia
+                    # Recalcular fb y corte con el nuevo recibo
+                    fb = fecha_bloqueo_para_mes(fecha_recibo)
+                    corte = fb - timedelta(days=2)
+                else:
+                    # Aplica al recibo siguiente: diferir
+                    cambios_dia_pendientes.append((fecha_cambio, nuevo_dia))
+            else:
+                # Todavia no es su momento o ya pasó: conservar para ciclos futuros
+                cambios_dia_pendientes.append((fecha_cambio, nuevo_dia))
+        cambios_dia = cambios_dia_pendientes
+
+        # ---------------------------------------------------------
+        # CAMBIO DE MENSUALIDAD
+        # Misma regla que para el dia de pago.
+        # ---------------------------------------------------------
+        cambios_cuota_pendientes = []
+        for fecha_cambio, nueva_cuota in cambios_cuota:
+            if fecha_anterior <= fecha_cambio <= fecha_recibo:
+                if fecha_cambio < fb:
+                    # Aplica al recibo actual
+                    cuota = Decimal(str(nueva_cuota)).quantize(
+                        Decimal("0.01"), ROUND_HALF_UP
+                    )
+                else:
+                    # Aplica al recibo siguiente: diferir
+                    cambios_cuota_pendientes.append((fecha_cambio, nueva_cuota))
+            else:
+                cambios_cuota_pendientes.append((fecha_cambio, nueva_cuota))
+        cambios_cuota = cambios_cuota_pendientes
 
         # Clasificar amortizaciones en P1 o P2
         amorts_p1 = []
@@ -476,15 +509,16 @@ df_dispos_raw = st.data_editor(
 
 st.subheader("Cambio de dia de pago")
 st.caption(
-    "Introduce el mes en que cambia el dia de pago (formato YYYY-MM) y el nuevo dia. "
-    "Solo afecta al numero de dias del calculo de intereses. La cuota no cambia."
+    "Introduce la fecha exacta en que se realiza el cambio de dia de pago. "
+    "Si esa fecha es anterior a la fecha de bloqueo del recibo del mes, aplica a ese recibo. "
+    "Si es igual o posterior al bloqueo, aplica al recibo del mes siguiente."
 )
 
 df_cambio_dia_raw = st.data_editor(
     pd.DataFrame({"Fecha del cambio": [None], "Nuevo dia": [None]}),
     column_config={
         "Fecha del cambio": st.column_config.DateColumn(
-            "Mes del cambio (cualquier dia del mes)", format="DD/MM/YYYY"
+            "Fecha exacta del cambio", format="DD/MM/YYYY"
         ),
         "Nuevo dia": st.column_config.NumberColumn(
             "Nuevo dia de pago", min_value=1, max_value=28, step=1
@@ -495,8 +529,8 @@ df_cambio_dia_raw = st.data_editor(
     key="editor_cambio_dia",
 )
 
-# Convertir a diccionario {(year, month): nuevo_dia}
-cambios_dia = {}
+# Convertir a lista de (fecha_exacta, nuevo_dia)
+cambios_dia = []
 for _, row in df_cambio_dia_raw.iterrows():
     try:
         if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nuevo dia"]):
@@ -504,7 +538,7 @@ for _, row in df_cambio_dia_raw.iterrows():
         fa = pd.to_datetime(row["Fecha del cambio"]).date()
         nd = int(row["Nuevo dia"])
         if 1 <= nd <= 28:
-            cambios_dia[(fa.year, fa.month)] = nd
+            cambios_dia.append((fa, nd))
     except Exception:
         pass
 
@@ -514,15 +548,16 @@ for _, row in df_cambio_dia_raw.iterrows():
 
 st.subheader("Cambio de mensualidad")
 st.caption(
-    "Introduce el mes en que cambia la cuota (formato YYYY-MM) y el nuevo importe. "
-    "Solo afecta a la amortizacion de capital. Los intereses se calculan igual."
+    "Introduce la fecha exacta en que se realiza el cambio de cuota. "
+    "Si esa fecha es anterior a la fecha de bloqueo del recibo del mes, aplica a ese recibo. "
+    "Si es igual o posterior al bloqueo, aplica al recibo del mes siguiente."
 )
 
 df_cambio_cuota_raw = st.data_editor(
     pd.DataFrame({"Fecha del cambio": [None], "Nueva cuota (EUR)": [None]}),
     column_config={
         "Fecha del cambio": st.column_config.DateColumn(
-            "Mes del cambio (cualquier dia del mes)", format="DD/MM/YYYY"
+            "Fecha exacta del cambio", format="DD/MM/YYYY"
         ),
         "Nueva cuota (EUR)": st.column_config.NumberColumn(
             "Nueva cuota (EUR)", min_value=0, step=1.0
@@ -533,8 +568,8 @@ df_cambio_cuota_raw = st.data_editor(
     key="editor_cambio_cuota",
 )
 
-# Convertir a diccionario {(year, month): nueva_cuota}
-cambios_cuota = {}
+# Convertir a lista de (fecha_exacta, nueva_cuota)
+cambios_cuota = []
 for _, row in df_cambio_cuota_raw.iterrows():
     try:
         if pd.isna(row["Fecha del cambio"]) or pd.isna(row["Nueva cuota (EUR)"]):
@@ -542,7 +577,7 @@ for _, row in df_cambio_cuota_raw.iterrows():
         fa = pd.to_datetime(row["Fecha del cambio"]).date()
         nc = float(row["Nueva cuota (EUR)"])
         if nc > 0:
-            cambios_cuota[(fa.year, fa.month)] = nc
+            cambios_cuota.append((fa, nc))
     except Exception:
         pass
 
