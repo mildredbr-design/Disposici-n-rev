@@ -160,13 +160,19 @@ def interes_con_movimientos(capital, tin, fecha_inicio, fecha_fin,
 
 def simulador(capital, tin, cuota_mensual, fecha_inicio,
               dia_recibo, df_amort, df_dispos, seguro_tasa,
-              tipo_producto, cambios_dia=None, cambios_cuota=None):
+              tipo_producto, cambios_dia=None, cambios_cuota=None,
+              fecha_joker=None):
     """
     cambios_dia:   lista de (fecha_exacta_cambio, nuevo_dia)
     cambios_cuota: lista de (fecha_exacta_cambio, nueva_cuota)
     La fecha exacta se compara con la fecha de bloqueo del recibo en curso:
-      - Si fecha_cambio < fecha_bloqueo → aplica al recibo actual
-      - Si fecha_cambio >= fecha_bloqueo → aplica al recibo siguiente
+      - Si fecha_cambio < fecha_bloqueo -> aplica al recibo actual
+      - Si fecha_cambio >= fecha_bloqueo -> aplica al recibo siguiente
+
+    fecha_joker: date o None. Fecha exacta de la orden del joker.
+      Misma regla de bloqueo para determinar a que recibo aplica:
+      - Si fecha_joker < bloqueo del recibo siguiente -> joker en recibo siguiente
+      - Si fecha_joker >= bloqueo del recibo siguiente -> joker en recibo subsiguiente
     """
 
     if cambios_dia is None:
@@ -191,7 +197,38 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
     dia_pago_actual = dia_recibo
     datos = []
     mes = 1
-    regularizacion_pendiente = Decimal("0")
+    reg_capital   = Decimal("0")  # reduccion de saldo por amorts P2
+    reg_intereses = Decimal("0")  # cargo a intereses por dispos P2
+
+    # ---------------------------------------------------------
+    # JOKER: determinar a que recibo aplica
+    # Se evalua una sola vez antes del bucle, usando el primer recibo
+    # como referencia para calcular el bloqueo del recibo siguiente.
+    # ---------------------------------------------------------
+    fecha_joker_recibo = None
+    if fecha_joker is not None:
+        # Encontrar el recibo del mes en que cae fecha_joker
+        recibo_candidato = crear_fecha_recibo(fecha_inicio, dia_recibo)
+        if recibo_candidato <= fecha_inicio:
+            recibo_candidato = crear_fecha_recibo(siguiente_mes_fecha(fecha_inicio), dia_recibo)
+        # Avanzar hasta el recibo cuyo periodo contiene fecha_joker
+        while recibo_candidato < fecha_joker:
+            recibo_candidato = crear_fecha_recibo(
+                siguiente_mes_fecha(recibo_candidato, dia_recibo), dia_recibo
+            )
+        # recibo_candidato es el recibo del mes en que se da la orden.
+        # El joker aplica al recibo SIGUIENTE por defecto (la orden de mayo aplica en junio).
+        recibo_siguiente = crear_fecha_recibo(
+            siguiente_mes_fecha(recibo_candidato, dia_recibo), dia_recibo
+        )
+        # Pero si fecha_joker >= bloqueo del recibo siguiente -> aplica al subsiguiente
+        fb_siguiente = fecha_bloqueo_para_mes(recibo_siguiente)
+        if fecha_joker < fb_siguiente:
+            fecha_joker_recibo = recibo_siguiente
+        else:
+            fecha_joker_recibo = crear_fecha_recibo(
+                siguiente_mes_fecha(recibo_siguiente, dia_recibo), dia_recibo
+            )
 
     while saldo > 0:
 
@@ -257,8 +294,12 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             elif corte < fa <= fecha_recibo:
                 amorts_p2.append((fa, imp))
 
-        # Recoger disposiciones del mes
-        dispos_mes = []
+        # Recoger disposiciones del mes: P1 (antes del bloqueo) y P2 (entre bloqueo y recibo)
+        # P1: afectan al calculo de intereses de este mes y aumentan el saldo inmediatamente
+        # P2: el recibo de este mes no cambia; los intereses extra se difieren como
+        #     reduccion de capital (regularizacion) al mes siguiente
+        dispos_p1 = []
+        dispos_p2 = []
         for _, row in df_dispos.iterrows():
             if pd.isna(row["Fecha"]):
                 continue
@@ -266,18 +307,24 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             imp = Decimal(str(row["Importe"]))
             if imp <= 0:
                 continue
-            if fecha_anterior <= fa <= fecha_recibo:
-                dispos_mes.append((fa, imp))
+            if fecha_anterior <= fa <= corte:
+                dispos_p1.append((fa, imp))
+            elif corte < fa <= fecha_recibo:
+                dispos_p2.append((fa, imp))
 
         amorts_p1.sort()
         amorts_p2.sort()
-        dispos_mes.sort()
+        dispos_p1.sort()
+        dispos_p2.sort()
 
-        amort_extra_p1 = sum(a[1] for a in amorts_p1)
-        amort_extra_p2 = sum(a[1] for a in amorts_p2)
-        dispos_total   = sum(d[1] for d in dispos_mes)
+        amort_extra_p1  = sum(a[1] for a in amorts_p1)
+        amort_extra_p2  = sum(a[1] for a in amorts_p2)
+        dispos_p1_total = sum(d[1] for d in dispos_p1)
+        dispos_p2_total = sum(d[1] for d in dispos_p2)
+        dispos_total    = dispos_p1_total + dispos_p2_total  # para la columna informativa
 
-        hay_movimientos = bool(amorts_p1 or amorts_p2 or dispos_mes)
+        # Solo las disposiciones P1 entran en el calculo de intereses de este mes
+        hay_movimientos = bool(amorts_p1 or amorts_p2 or dispos_p1)
 
         # saldo_inicio_mes = capital ANTES de cualquier movimiento
         saldo_inicio_mes = saldo
@@ -287,7 +334,7 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             movimientos = (
                 [(fa, imp, "amortizacion") for fa, imp in amorts_p1] +
                 [(fa, imp, "amortizacion") for fa, imp in amorts_p2] +
-                [(fa, imp, "disposicion")  for fa, imp in dispos_mes]
+                [(fa, imp, "disposicion")  for fa, imp in dispos_p1]
             )
             interes, _ = interes_con_movimientos(
                 saldo_inicio_mes, tin, fecha_anterior, fecha_recibo,
@@ -299,30 +346,50 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
                 tipo_producto, hay_movimiento=False
             )
 
-        # Regularizacion diferida del mes anterior (P2 previo)
-        interes += regularizacion_pendiente
-        regularizacion_pendiente = Decimal("0")
+        # Regularizacion diferida del mes anterior:
+        # - reg_capital: reduce saldo (viene de amorts P2)
+        # - reg_intereses: suma a intereses dentro de la cuota (viene de dispos P2)
+        saldo -= reg_capital
+        if saldo < 0:
+            saldo = Decimal("0")
+        reg_capital = Decimal("0")
+        interes += reg_intereses
+        reg_intereses = Decimal("0")
 
-        # Aplicar P1 al saldo este mes
+        # Aplicar amortizaciones P1 al saldo este mes
         saldo -= amort_extra_p1
         if saldo < 0:
             saldo = Decimal("0")
 
-        # Aplicar disposiciones al saldo este mes
-        saldo += dispos_total
+        # Aplicar disposiciones P1 al saldo este mes
+        saldo += dispos_p1_total
 
-        # P2: recibo proximo intacto, diferir ahorro al mes siguiente
+        # Amortizaciones P2: recibo de este mes intacto (calculado sin la amortizacion).
+        # Los intereses de mas pagados (desde fa hasta fecha_recibo) se regularizan
+        # el dia siguiente al recibo reduciendo capital (reg_capital).
         if amorts_p2:
-            fecha_sig_recibo = crear_fecha_recibo(
-                siguiente_mes_fecha(fecha_recibo, dia_pago_actual), dia_pago_actual
-            )
             for fa, imp in amorts_p2:
                 ahorro = calcular_interes_tramo(
-                    imp, tin, fa, fecha_sig_recibo,
+                    imp, tin, fa, fecha_recibo,
                     tipo_producto, hay_movimiento=True
                 )
-                regularizacion_pendiente -= ahorro
+                reg_capital += ahorro
             saldo -= amort_extra_p2
+            if saldo < 0:
+                saldo = Decimal("0")
+
+        # Disposiciones P2: el recibo de este mes no cambia.
+        # Los intereses extra generados desde la fecha de disposicion hasta la fecha
+        # de este recibo se suman a los intereses del mes siguiente dentro de la cuota
+        # (reg_intereses), sin modificar la cuota.
+        if dispos_p2:
+            for fa, imp in dispos_p2:
+                interes_extra = calcular_interes_tramo(
+                    imp, tin, fa, fecha_recibo,
+                    tipo_producto, hay_movimiento=True
+                )
+                reg_intereses += interes_extra
+            saldo += dispos_p2_total
             if saldo < 0:
                 saldo = Decimal("0")
 
@@ -332,7 +399,12 @@ def simulador(capital, tin, cuota_mensual, fecha_inicio,
             Decimal("0.01"), ROUND_HALF_UP
         )
 
-        if saldo + interes <= cuota:
+        # JOKER: recibo = 0, intereses se recapitalizan (suman al saldo), seguro se cobra
+        if fecha_joker_recibo is not None and fecha_recibo == fecha_joker_recibo:
+            saldo = saldo + interes
+            amort = Decimal("0")
+            cuota_final = Decimal("0")
+        elif saldo + interes <= cuota:
             amort = saldo
             saldo = Decimal("0")
             cuota_final = amort + interes
@@ -428,7 +500,7 @@ col1, col2 = st.columns(2)
 with col1:
     capital = st.number_input("Capital pendiente (EUR)", 0.0, 1_000_000.0, 6000.0)
     tin = st.number_input("TIN anual (%)", 0.0, 100.0, 21.79)
-    fecha_inicio = st.date_input("Fecha inicio", datetime.today())
+    fecha_inicio = st.date_input("Fecha de ultimo recibo / Fecha de financiacion", datetime.today())
     dia_recibo = st.selectbox("Dia del recibo", list(range(1, 29)))
 
 with col2:
@@ -586,6 +658,33 @@ st.caption(f"Cambios de dia detectados: {cambios_dia if cambios_dia else 'Ningun
 st.caption(f"Cambios de cuota detectados: {cambios_cuota if cambios_cuota else 'Ninguno'}")
 
 # ---------------------------------------------------------
+# JOKER / COMODIN
+# ---------------------------------------------------------
+
+st.subheader("Joker / Comodin")
+st.caption(
+    "El joker hace que el recibo del mes seleccionado sea 0 EUR. "
+    "Los intereses de ese mes se recapitalizan (se suman al capital pendiente). "
+    "Si la fecha de la orden es anterior a la fecha de bloqueo del recibo siguiente, "
+    "el joker aplica a ese recibo. Si es posterior o igual al bloqueo, aplica al "
+    "recibo subsiguiente. Solo puede haber un joker."
+)
+
+col_joker1, col_joker2 = st.columns(2)
+with col_joker1:
+    usar_joker = st.checkbox("Activar joker")
+with col_joker2:
+    fecha_joker_input = None
+    if usar_joker:
+        fecha_joker_input = st.date_input(
+            "Fecha de la orden del joker",
+            datetime.today(),
+            key="joker_fecha"
+        )
+
+fecha_joker = fecha_joker_input if usar_joker else None
+
+# ---------------------------------------------------------
 # TAE referencia y bloqueo
 # ---------------------------------------------------------
 
@@ -615,7 +714,8 @@ if st.button("Calcular", type="primary"):
         fecha_inicio, dia_recibo,
         df_amort_raw, df_dispos_raw,
         seguro_tasa, tipo_producto,
-        cambios_dia, cambios_cuota
+        cambios_dia, cambios_cuota,
+        fecha_joker
     )
 
     st.subheader("Tabla de amortizacion")
